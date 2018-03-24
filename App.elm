@@ -150,6 +150,47 @@ anyOf listOfChars =
         |> choice
 
 
+mapP : (a -> b) -> Parser ( a, c ) -> Parser ( b, c )
+mapP f parser =
+    let
+        innerFn input =
+            let
+                result =
+                    run parser input
+            in
+                case result of
+                    Success ( value, remaining ) ->
+                        let
+                            newValue =
+                                f value
+                        in
+                            Success ( newValue, remaining )
+
+                    Failure err ->
+                        Failure err
+    in
+        Parser innerFn
+
+
+(<!>) : (a -> b) -> Parser ( a, c ) -> Parser ( b, c )
+(<!>) =
+    mapP
+
+
+(|>>) : Parser ( a, b ) -> (a -> c) -> Parser ( c, b )
+(|>>) x f =
+    mapP f x
+
+
+returnP : a -> Parser ( a, String )
+returnP x =
+    let
+        innerFn input =
+            Success ( x, input )
+    in
+        Parser innerFn
+
+
 run : Parser a -> String -> Result a
 run parser input =
     let
@@ -167,6 +208,7 @@ init =
 view : a -> Html msg
 view model =
     let
+
         parseA =
             pchar 'A'
 
@@ -181,8 +223,8 @@ view model =
 
         parseAThenB =
             parseA .>>. parseB
+            {- andThen parseA parseB -}
 
-        {- andThen parseA parseB -}
         resultAThenB =
             toString <| run parseAThenB input
 
@@ -224,13 +266,26 @@ view model =
             anyOf [ 'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm' ]
 
         resultParseLowercase =
-            toString <| run parseLowercase "AbcdefghijkM"
+            toString <| run parseLowercase "mbcdefghijkM"
 
         parseDigit =
-            anyOf [ '0', '1', '2', '3', '4', '5', '6', '7', '8', '9']
+            anyOf [ '0', '1', '2', '3', '4', '5', '6', '7', '8', '9' ]
 
         resultParseDigit =
             toString <| run parseDigit "1ABC"
+
+        parseThreeDigitsAsStr =
+            (parseDigit .>>. parseDigit .>>. parseDigit)
+                |>> \( ( c1, c2 ), c3 ) -> String.fromChar c1 ++ String.fromChar c2 ++ String.fromChar c3
+
+        resultParseThreeDigitsAsStr =
+            toString <| run parseThreeDigitsAsStr "123A"
+
+        parseThreeDigitsAsInt =
+            mapP String.toInt parseThreeDigitsAsStr
+
+        resultParseThreeDigitsAsInt =
+            toString <| run parseThreeDigitsAsInt "123A"
     in
         Html.div []
             [ Html.p [] [ Html.text "Hello, World! " ]
@@ -245,6 +300,7 @@ view model =
             , Html.p [] [ Html.text resultaAndThenBorC_4 ]
             , Html.p [] [ Html.text resultParseLowercase ]
             , Html.p [] [ Html.text resultParseDigit ]
+            , Html.p [] [ Html.text resultParseThreeDigitsAsStr ]
             ]
 
 
