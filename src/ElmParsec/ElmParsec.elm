@@ -88,11 +88,11 @@ type Parser a
     = Parser (String -> ParserResult a)
 
 
-{-| "bindP" takes a parser-producing function f, and a parser p
+{-| "bind" takes a parser-producing function f, and a parser p
 and passes the output of p into f, to create a new parser
 -}
-bindP : (a -> Parser b) -> Parser ( a, String ) -> Parser b
-bindP f p =
+bind : (a -> Parser b) -> Parser ( a, String ) -> Parser b
+bind f p =
     let
         innerFn input =
             let
@@ -118,7 +118,7 @@ bindP f p =
 
 (>>=) : Parser ( a, String ) -> (a -> Parser b) -> Parser b
 (>>=) p f =
-    bindP f p
+    bind f p
 
 
 {-| -}
@@ -187,41 +187,20 @@ If both parsers succeed, return a pair (tuple) that contains both parsed values.
 Here’s the code for andThen:
 
 -}
-andThen : Parser ( a, String ) -> Parser ( b, c ) -> Parser ( ( a, b ), c )
+andThen : Parser ( a, String ) -> Parser ( b, String ) -> Parser ( ( a, b ), String )
 andThen parser1 parser2 =
-    let
-        innerFn : String -> ParserResult ( ( a, b ), c )
-        innerFn input =
-            let
-                result1 =
-                    run parser1 input
-            in
-                case result1 of
-                    Failure err ->
-                        Failure err
-
-                    Success ( value1, remaining1 ) ->
-                        let
-                            result2 =
-                                run parser2 remaining1
-                        in
-                            case result2 of
-                                Failure err ->
-                                    Failure err
-
-                                Success ( value2, remaining2 ) ->
-                                    let
-                                        combinedValue =
-                                            ( value1, value2 )
-                                    in
-                                        Success ( combinedValue, remaining2 )
-    in
-        Parser innerFn
+    parser1
+        >>= (\p1Result ->
+                parser2
+                    >>= (\p2Result ->
+                            return ( p1Result, p2Result )
+                        )
+            )
 
 
 {-| This is the documentation for infix .>>. operator for andThen
 -}
-(.>>.) : Parser ( a, String ) -> Parser ( b, c ) -> Parser ( ( a, b ), c )
+(.>>.) : Parser ( a, String ) -> Parser ( b, String ) -> Parser ( ( a, b ), String )
 (.>>.) =
     andThen
 
@@ -342,39 +321,21 @@ If the result was a success, apply the specified function to the success value t
 …return the new, mapped, value instead of the original value.
 
 -}
-map : (a -> b) -> Parser ( a, c ) -> Parser ( b, c )
-map f parser =
-    let
-        innerFn : String -> ParserResult ( b, c )
-        innerFn input =
-            let
-                result =
-                    run parser input
-            in
-                case result of
-                    Success ( value, remaining ) ->
-                        let
-                            newValue =
-                                f value
-                        in
-                            Success ( newValue, remaining )
-
-                    Failure err ->
-                        Failure err
-    in
-        Parser innerFn
+map : (a -> a1) -> Parser ( a, String ) -> Parser ( a1, String )
+map f =
+    bind (f >> return)
 
 
 {-| infix version of map
 -}
-(<!>) : (a -> b) -> Parser ( a, c ) -> Parser ( b, c )
+(<!>) : (a -> a1) -> Parser ( a, String ) -> Parser ( a1, String )
 (<!>) =
     map
 
 
 {-| "piping" version of map
 -}
-(|>>) : Parser ( a, b ) -> (a -> c) -> Parser ( c, b )
+(|>>) : Parser ( a, String ) -> (a -> a1) -> Parser ( a1, String )
 (|>>) x f =
     map f x
 
@@ -399,24 +360,28 @@ return x =
 {-| apply a wrapped function to a wrapped value
 apply transforms a Parser containing a function (Parser< 'a->'b >) into a function in Parser World (Parser<'a> -> Parser<'b >)
 -}
-apply : Parser ( a -> b, String ) -> Parser ( a, c ) -> Parser ( b, c )
-apply fp xP =
+apply : Parser ( a -> b, String ) -> Parser ( a, String ) -> Parser ( b, String )
+apply fP xP =
     -- create a Parser containing a pair (f, x)
-    (fp .>>. xP)
-        -- map the pair by applying f to x
-        |> map (\( f, x ) -> f x)
+    fP
+        >>= (\f ->
+                xP
+                    >>= (\x ->
+                            return (f x)
+                        )
+            )
 
 
 {-| infix <*> for apply
 -}
-(<*>) : Parser ( a -> b, String ) -> Parser ( a, c ) -> Parser ( b, c )
+(<*>) : Parser ( a -> b, String ) -> Parser ( a, String ) -> Parser ( b, String )
 (<*>) =
     apply
 
 
 {-| lift a two parameter function to Parser World
 -}
-lift2 : (a -> a1 -> b) -> Parser ( a, String ) -> Parser ( a1, c ) -> Parser ( b, c )
+lift2 : (a -> a1 -> b) -> Parser ( a, String ) -> Parser ( a1, String ) -> Parser ( b, String )
 lift2 f xP yP =
     return f <*> xP <*> yP
 
@@ -426,17 +391,17 @@ The signature is:
 
 addP : Parser ( number, String ) -> Parser ( number, c ) -> Parser ( number, c )
 which shows that addP does indeed take two Parser ( number, c) parameters and returns another Parser (number, c)
+
 -}
-addP : Parser ( number, String ) -> Parser ( number, c ) -> Parser ( number, c )
+addP : Parser ( number, String ) -> Parser ( number, String ) -> Parser ( number, String )
 addP =
     lift2 (+)
 
 
 {-| And here’s the startsWith function being lifted to Parser World
 Again, the signature of startsWithP is parallel to the signature of startsWith, but lifted to the world of Parsers.
-
 -}
-startsWithP : Parser ( String, String ) -> Parser ( String, c ) -> Parser ( Bool, c )
+startsWithP : Parser ( String, String ) -> Parser ( String, String ) -> Parser ( Bool, String )
 startsWithP =
     lift2 String.startsWith
 
@@ -567,31 +532,13 @@ Then combine the first value and the remaining values.
 -}
 many1 : Parser ( a, String ) -> Parser ( List a, String )
 many1 parser =
-    let
-        innerFn input =
-            -- run parser with the input
-            let
-                firstResult =
-                    run parser input
-            in
-                --  test the result for Failure/Success
-                case firstResult of
-                    Failure err ->
-                        Failure err
-
-                    -- failed
-                    Success ( firstValue, inputAfterFirstParse ) ->
-                        -- if first found, look for zeroOrMore now
-                        let
-                            ( subsequentValues, remainingInput ) =
-                                parseZeroOrMore parser inputAfterFirstParse
-
-                            values =
-                                firstValue :: subsequentValues
-                        in
-                            Success ( values, remainingInput )
-    in
-        Parser innerFn
+    parser
+        >>= (\head ->
+                many parser
+                    >>= (\tail ->
+                            return (head :: tail)
+                        )
+            )
 
 
 {-| int - Parsing an integer
@@ -705,7 +652,7 @@ The result contains “AB” and “CD” only. The whitespace between them has 
 Keep only the result of the left side parser
 
 -}
-(.>>) : Parser ( a, String ) -> Parser ( b, c ) -> Parser ( a, c )
+(.>>) : Parser ( a, String ) -> Parser ( b, String ) -> Parser ( a, String )
 (.>>) p1 p2 =
     -- create a pair
     -- andThen p1 p2
@@ -717,7 +664,7 @@ Keep only the result of the left side parser
 
 {-| Keep only the result of the right side parser
 -}
-(>>.) : Parser ( a, String ) -> Parser ( b, c ) -> Parser ( b, c )
+(>>.) : Parser ( a, String ) -> Parser ( b, String ) -> Parser ( b, String )
 (>>.) p1 p2 =
     -- create a pair
     -- andThen p1 p2
@@ -740,7 +687,7 @@ pdoublequote = pchar '"' let quotedInteger = between pdoublequote int pdoublequo
 run quotedInteger "1234" -- Failure "Expecting '"'. Got '1'"
 
 -}
-between : Parser ( a, String ) -> Parser ( b, String ) -> Parser ( d, c ) -> Parser ( b, c )
+between : Parser ( a, String ) -> Parser ( b, String ) -> Parser ( d, String ) -> Parser ( b, String )
 between p1 p2 p3 =
     -- >>. keeps only the result of the right hand parser
     -- .>> keeps only the result of the left hand parser
