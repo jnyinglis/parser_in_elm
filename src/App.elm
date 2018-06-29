@@ -292,6 +292,15 @@ view model =
 
         resultDigitSemicolon2_2 =
             toString <| ElmParsec.run digitThenSemicolon2 "1"
+
+        parseDigit_WithLabel = 
+            digit
+            <?> "digit"
+
+        resultParseDigit_WithLabel =
+            ElmParsec.run parseDigit_WithLabel "|ABC"
+            |> ElmParsec.printResult
+
     in
         Html.div []
             [ Html.p [] [ Html.text "Hello, World! " ]
@@ -339,6 +348,8 @@ view model =
             , Html.p [] [ Html.text "run zeroOrMoreDigitList \"Z;\" ", Html.text resultZeroOrMore4 ]
             , Html.p [] [ Html.text "run opt \"1;\" ", Html.text resultDigitSemicolon2_1 ]
             , Html.p [] [ Html.text "run opt \"1\" ", Html.text resultDigitSemicolon2_2 ]
+
+            , Html.p [] [ Html.text "run opt \"1\" ", Html.text resultParseDigit_WithLabel ]
             ]
 
 

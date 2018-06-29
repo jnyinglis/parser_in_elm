@@ -21,6 +21,10 @@ module ElmParsec.ElmParsec
         , between
         , sepBy1
         , sepBy
+        , bind
+        , printResult
+        , setLabel
+        , (<?>)
         , run
         )
 
@@ -65,6 +69,8 @@ And in this post we created the following additional combinators:
 
 -}
 
+import Char
+
 
 {-| Implementation 3. Returning a Success/Failure
 We want to be able to tell the difference between a successful match and a failure, and returning a stringly-typed message is not very helpful, so let’s define a special “choice” type to indicate the difference. I’ll call it Result:
@@ -79,13 +85,70 @@ Note: for more on using this Success/Failure approach, see my talk on functional
 We can now rewrite the parser to return one of the Result cases, like this:
 
 -}
+type alias ParserLabel =
+    String
+
+
+type alias ParserError =
+    String
+
+
 type ParserResult a
     = Success a
-    | Failure String
+    | Failure ( ParserLabel, ParserError )
 
 
 type Parser a
-    = Parser (String -> ParserResult a)
+    = Parser
+        { parseFn : String -> ParserResult a
+        , label : ParserLabel
+        }
+
+
+printResult : ParserResult ( Char, a ) -> String
+printResult result =
+    case result of
+        Success ( value, input ) ->
+            String.fromChar value
+
+        Failure ( label, error ) ->
+            "Error parsing " ++ label ++ "\n" ++ error
+
+
+
+-- Update the label in the parser
+
+
+setLabel : Parser a -> ParserLabel -> Parser a
+setLabel parser newLabel =
+    -- change the inner function to use the new label
+    let
+        -- extract the function
+        (Parser { parseFn }) =
+            parser
+
+        -- wrap in a new function to allow changing the label on error
+        newInnerFn input =
+            let
+                result =
+                    parseFn input
+            in
+                case result of
+                    Success s ->
+                        -- if Success, do nothing
+                        Success s
+
+                    Failure ( oldLabel, err ) ->
+                        -- if Failure, return new label
+                        Failure ( newLabel, err )
+    in
+        -- return the Parser
+        Parser { parseFn = newInnerFn, label = newLabel }
+
+
+(<?>) : Parser a -> ParserLabel -> Parser a
+(<?>) =
+    setLabel
 
 
 {-| "bind" takes a parser-producing function f, and a parser p
@@ -94,15 +157,18 @@ and passes the output of p into f, to create a new parser
 bind : (a -> Parser b) -> Parser ( a, String ) -> Parser b
 bind f p =
     let
+        label =
+            "unknown"
+
         innerFn input =
             let
                 result1 =
                     run p input
             in
                 case result1 of
-                    Failure err ->
+                    Failure ( label, err ) ->
                         -- return error from parser1
-                        Failure err
+                        Failure ( label, err )
 
                     Success ( value1, remainingInput ) ->
                         -- apply f to get a new parser
@@ -113,7 +179,7 @@ bind f p =
                             -- run parser with remaining input
                             run p2 remainingInput
     in
-        Parser innerFn
+        Parser { parseFn = innerFn, label = label }
 
 
 (>>=) : Parser ( a, String ) -> (a -> Parser b) -> Parser b
@@ -133,6 +199,30 @@ charA input =
             ( False, input )
 
 
+
+--Match an input token if the predicate is satisfied
+
+
+satisfy : (Char -> Bool) -> ParserLabel -> Parser ( Char, String )
+satisfy predicate label =
+    let
+        innerFn input =
+            case String.uncons input of
+                Just ( first, remaining ) ->
+                    case predicate first of
+                        True ->
+                            Success ( first, remaining )
+
+                        False ->
+                            Failure ( label, "Unexpected " ++ String.fromChar first )
+
+                Nothing ->
+                    Failure ( label, "No more input" )
+    in
+        -- return the parser
+        Parser { parseFn = innerFn, label = label }
+
+
 {-| Implementation 2. Parsing a specified character
 Let’s refactor so that we can pass in the character we want to match, rather than having it be hard coded.
 
@@ -145,21 +235,71 @@ char : Char -> Parser ( Char, String )
 char charToMatch =
     let
         -- inner function
-        innerFn : String -> ParserResult ( Char, String )
-        innerFn input =
-            case String.uncons input of
-                Just ( charFound, remaining ) ->
-                    case charFound == charToMatch of
-                        True ->
-                            Success ( charToMatch, remaining )
+        label =
+            String.fromChar charToMatch
 
-                        False ->
-                            Failure <| "Expecting " ++ String.fromChar charToMatch ++ ". Got " ++ String.fromChar charFound
-
-                Nothing ->
-                    Failure "No more input"
+        predicate ch =
+            (ch == charToMatch)
     in
-        Parser innerFn
+        satisfy predicate label
+
+
+
+-- parse a digit
+
+
+digitChar : Parser ( Char, String )
+digitChar =
+    let
+        predicate =
+            Char.isDigit
+
+        label =
+            "digit"
+    in
+        satisfy predicate label
+
+
+
+-- parse a whitespace char
+
+
+whitespaceChar : Parser ( Char, String )
+whitespaceChar =
+    let
+        isWhiteSpace a =
+            List.member a [ ' ', '\t', '\n' ]
+
+        predicate =
+            isWhiteSpace
+
+        label =
+            "whitespace"
+    in
+        satisfy predicate label
+
+
+
+-- parse zero or more whitespace char
+
+
+spaces : Parser ( List Char, String )
+spaces =
+    many whitespaceChar
+
+
+
+-- parse one or more whitespace char
+
+
+spaces1 : Parser ( List Char, String )
+spaces1 =
+    many1 whitespaceChar
+
+
+getLabel : Parser a -> ParserLabel
+getLabel (Parser { label }) =
+    label
 
 
 {-| Combining two parsers in sequence: the “and then” combinator
@@ -189,13 +329,18 @@ Here’s the code for andThen:
 -}
 andThen : Parser ( a, String ) -> Parser ( b, String ) -> Parser ( ( a, b ), String )
 andThen parser1 parser2 =
-    parser1
-        >>= (\p1Result ->
-                parser2
-                    >>= (\p2Result ->
-                            return ( p1Result, p2Result )
-                        )
-            )
+    let
+        label =
+            (getLabel parser1) ++ " andThen " ++ (getLabel parser2)
+    in
+        parser1
+            >>= (\p1Result ->
+                    parser2
+                        >>= (\p2Result ->
+                                return ( p1Result, p2Result )
+                            )
+                )
+            <?> label
 
 
 {-| This is the documentation for infix .>>. operator for andThen
@@ -222,6 +367,9 @@ Here’s the code for orElse:
 orElse : Parser a -> Parser a -> Parser a
 orElse parser1 parser2 =
     let
+        label =
+            (getLabel parser1) ++ " orElse " ++ (getLabel parser2)
+
         innerFn : String -> ParserResult a
         innerFn input =
             let
@@ -240,7 +388,7 @@ orElse parser1 parser2 =
                         run parser2 input
     in
         -- return the inner function
-        Parser innerFn
+        Parser { parseFn = innerFn, label = label }
 
 
 {-| This is the documentation for the infix operator <|>, for orElse
@@ -269,14 +417,17 @@ Parser<'a> list -> Parser<'a>
 which shows us that, as expected, the input is a list of parsers, and the output is a single parser.
 
 -}
-choice : List (Parser ( Char, String )) -> Parser ( Char, String )
+choice : List (Parser a) -> Parser a
 choice listOfParsers =
     let
+        label =
+            "unknown"
+
         innerFn _ =
-            Failure "At least one parser must be defined"
+            Failure ( label, "At least one parser must be defined" )
 
         parserFail =
-            Parser innerFn
+            Parser { parseFn = innerFn, label = label }
 
         firstParser =
             case List.head listOfParsers of
@@ -307,9 +458,16 @@ Here’s the code:
 -}
 anyOf : List Char -> Parser ( Char, String )
 anyOf listOfChars =
-    listOfChars
-        |> List.map char
-        |> choice
+    let
+        label =
+            "any of "
+
+        x =
+            listOfChars
+                |> List.map char
+                |> choice
+    in
+        setLabel x label
 
 
 {-| apply a function to the value inside a parser
@@ -350,11 +508,14 @@ return simply transforms a normal value into a value in Parser World
 return : a -> Parser ( a, String )
 return x =
     let
+        label =
+            "unknown"
+
         innerFn : String -> ParserResult ( a, String )
         innerFn input =
             Success ( x, input )
     in
-        Parser innerFn
+        Parser { parseFn = innerFn, label = label }
 
 
 {-| apply a wrapped function to a wrapped value
@@ -513,11 +674,14 @@ parseZeroOrMore parser input =
 many : Parser ( a, String ) -> Parser ( List a, String )
 many parser =
     let
+        label =
+            "unknown"
+
         innerFn input =
             -- parse the input -- wrap in Success as it always succeeds
             Success (parseZeroOrMore parser input)
     in
-        Parser innerFn
+        Parser { parseFn = innerFn, label = label }
 
 
 {-| many1 - the “one or more” combinator many1, using the following logic:
@@ -736,7 +900,7 @@ sepBy p sep =
 run : Parser a -> String -> ParserResult a
 run parser input =
     let
-        (Parser innerFn) =
+        (Parser { parseFn }) =
             parser
     in
-        innerFn input
+        parseFn input
